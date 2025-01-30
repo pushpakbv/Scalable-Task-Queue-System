@@ -1,0 +1,37 @@
+# === Entire Project === #
+.env                  # Ignore all .env files (use .env.example for templates)
+.DS_Store             # macOS system file
+Thumbs.db             # Windows thumbnail cache
+*.log                 # Log files
+logs/                 # Log directories
+.idea/                # JetBrains IDE
+.vscode/              # VS Code settings
+dist/                 # Build output (generic)
+node_modules/         # Node.js dependencies (covered below)
+docker-compose.override.yml  # Local Docker overrides
+**/.env.local         # Local environment files
+
+
+# === Frontend (Next.js) === #
+frontend/node_modules/
+    
+frontend/.next/       # Next.js build cache
+frontend/out/         # Static export output
+frontend/.swc/        # SWC cache
+
+
+# === Backend (Node.js) === #
+backend/node_modules/ 
+backend/package-lock.json
+backend/yarn.lock
+
+
+# === Worker (Node.js) === #
+worker/node_modules/
+worker/package-lock.json
+worker/yarn.lock
+
+
+# === PostgreSQL & Redis === #
+*.dump                # Database dumps
+postgres-data/        # Docker volume for PostgreSQL
