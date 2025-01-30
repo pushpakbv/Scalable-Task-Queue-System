@@ -1,0 +1,25 @@
+# Use Node.js LTS
+FROM node:18-alpine
+
+# Set working directory
+WORKDIR /app
+
+# Copy wait-for-it script
+# COPY wait-for-it.sh ./
+# RUN chmod +x wait-for-it.sh
+
+# Copy package files first to leverage Docker cache
+COPY package*.json ./
+
+# Install dependencies
+RUN npm install
+
+# Copy source code
+COPY . .
+
+# Expose API port
+EXPOSE 3000
+
+# Wait for Postgres/Redis, then start the API
+# CMD ["./wait-for-it.sh", "postgres:5432", "--", "node", "index.js"].
+CMD ["node", "index.js"]

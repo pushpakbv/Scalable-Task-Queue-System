@@ -1,4 +1,3 @@
-version: '3'
 services:
   api:
     build: ./backend
@@ -9,7 +8,12 @@ services:
       - postgres
     environment:
       - REDIS_HOST=redis
+      - REDIS_PORT=6379
       - PG_HOST=postgres
+      - PG_USER=postgres
+      - PG_PASSWORD=password
+      - PG_DATABASE=task_queue
+      - PG_PORT=5432
 
   worker:
     build: ./worker
@@ -18,12 +22,18 @@ services:
       - postgres
     environment:
       - REDIS_HOST=redis
+      - REDIS_PORT=6379
       - PG_HOST=postgres
+      - PG_USER=postgres
+      - PG_PASSWORD=password
+      - PG_DATABASE=task_queue
+      - PG_PORT=5432
 
   redis:
     image: redis
-    ports:
-      - "6379:6379"
+    # Remove port mapping to avoid conflicts
+    # ports:
+    #   - "6379:6379"
 
   postgres:
     image: postgres
@@ -32,8 +42,6 @@ services:
       POSTGRES_DB: task_queue
     volumes:
       - postgres-data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
 
 volumes:
   postgres-data:

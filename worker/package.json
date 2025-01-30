@@ -1,0 +1,13 @@
+{
+    "name": "worker",
+    "version": "1.0.0",
+    "main": "worker.js",
+    "scripts": {
+    "start": "node worker.js"
+  },
+    "dependencies": {
+      "redis": "^4.7.0",
+      "pg": "^8.13.1",
+      "dotenv": "^16.4.7"
+    }
+  }
