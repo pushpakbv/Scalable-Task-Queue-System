@@ -2,90 +2,73 @@ const express = require('express');
 const { Client } = require('pg');
 const { createClient } = require('redis');
 const { v4: uuidv4 } = require('uuid');
-const app = express();
 const cors = require('cors');
-const env = require('dotenv');
-
 const { createServer } = require('http');
 const { WebSocketServer } = require('ws');
 
+const app = express();
 const server = createServer(app);
-const wss = new WebSocketServer({ server });
 
+// ✅ WebSocket Server with CORS validation
+const wss = new WebSocketServer({
+  server,
+  verifyClient: (info, callback) => {
+    // Allow only frontend origin (port 3001)
+    if (info.origin === 'http://localhost:3001') callback(true);
+    else callback(false);
+  }
+});
 
-require('dotenv').config();
-app.use(cors());
+// Redis subscriber for task updates
+const redisSubscriber = createClient({ url: 'redis://redis:6379' });
+redisSubscriber.connect();
+redisSubscriber.subscribe('task_updates', (message) => {
+  wss.clients.forEach((client) => {
+    if (client.readyState === client.OPEN) client.send(message);
+  });
+});
+
+// CORS for HTTP routes
+app.use(cors({ origin: 'http://localhost:3001' }));
 app.use(express.json());
 
-
-
-// CORS Setup
-const corsOptions = {
-    origin: 'http://localhost:3001',
-    methods: 'POST',
-  };
-  
-  app.use(cors(corsOptions));
-
-
-  const redisSubscriber = createClient({ url: 'redis://redis:6379' });
-  redisSubscriber.connect();
-
-  redisSubscriber.subscribe('task_updates', (message) => {
-    // Broadcast message to all connected WebSocket clients
-    wss.clients.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(message);
-      }
-    });
-  });
-
-
-
-
-// PostgreSQL Client Setup
-// PostgreSQL Client Setup
+// PostgreSQL setup
 const pgClient = new Client({
-  user: process.env.PG_USER || 'postgres',
-  host: process.env.PG_HOST || 'postgres',
-  database: process.env.PG_DATABASE || 'task_queue',
-  password: process.env.PG_PASSWORD || 'password',
-  port: parseInt(process.env.PG_PORT || '5432')
+  user: 'postgres',
+  host: 'postgres',
+  database: 'task_queue',
+  password: 'password',
+  port: 5432
 });
-
-pgClient.on('error', (err) => {
-  console.error('PostgreSQL Client Error:', err);
-});
-  
 pgClient.connect();
 
-// Redis Client Setup
-const redisClient = createClient({
-  url: `redis://${process.env.REDIS_HOST || 'localhost'}:${process.env.REDIS_PORT || '6379'}`
-});
-redisClient.on('error', (err) => console.log('Redis Client Error', err));
+// Redis setup
+const redisClient = createClient({ url: 'redis://redis:6379' });
 redisClient.connect();
 
-process.on('SIGINT', async () => {
-  await redisClient.quit();
-  await pgClient.end();
-  process.exit(0);
-});
-
-// Task Submission Endpoint
+// ✅ Publish "pending" status when a task is submitted
 app.post('/api/tasks', async (req, res) => {
   try {
     const taskId = uuidv4();
     const taskData = req.body;
 
-    // 1. Add task to Redis Stream
-    await redisClient.xAdd('task_stream', '*', { task: JSON.stringify({ id: taskId, data: taskData }) });
+    // Add to Redis Stream
+    await redisClient.xAdd('task_stream', '*', { 
+      task: JSON.stringify({ id: taskId, data: taskData }) 
+    });
 
-    // 2. Log task to PostgreSQL
+    // Log to PostgreSQL
     await pgClient.query(
       'INSERT INTO tasks(task_id, status, data) VALUES ($1, $2, $3)',
       [taskId, 'pending', JSON.stringify(taskData)]
     );
+
+    // ✅ Publish "pending" status to frontend
+    await redisClient.publish('task_updates', JSON.stringify({ 
+      id: taskId, 
+      status: 'pending', 
+      retries: 0 
+    }));
 
     res.status(201).json({ taskId, status: 'pending' });
   } catch (error) {
@@ -93,17 +76,14 @@ app.post('/api/tasks', async (req, res) => {
   }
 });
 
-// Add this endpoint to index.js
+// Get all tasks
 app.get('/api/tasks', async (req, res) => {
   try {
-    const result = await pgClient.query('SELECT task_id as id, status, data, retries FROM tasks ORDER BY created_at DESC');
+    const result = await pgClient.query('SELECT task_id as id, status, data, retries FROM tasks');
     res.json(result.rows);
   } catch (error) {
-    console.error('Error fetching tasks:', error);
     res.status(500).json({ error: 'Failed to fetch tasks' });
   }
 });
 
-// Start Server
-app.listen(3000, () => console.log('API running on port 3000'));
-//test
+server.listen(3000, () => console.log('API & WebSocket running on port 3000'));
