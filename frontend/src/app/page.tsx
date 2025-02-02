@@ -1,3 +1,4 @@
+import TaskList from "./components/TaskList";
 import TaskForm from "./components/TaskForm";
 
 export default function Home() {
@@ -7,6 +8,7 @@ export default function Home() {
         Task Queue Dashboard
       </h1>
       <TaskForm />
+      <TaskList />
     </main>
   );
 }

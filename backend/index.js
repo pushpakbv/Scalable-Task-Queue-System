@@ -5,9 +5,19 @@ const { v4: uuidv4 } = require('uuid');
 const app = express();
 const cors = require('cors');
 const env = require('dotenv');
-app.use(express.json());
+
+const { createServer } = require('http');
+const { WebSocketServer } = require('ws');
+
+const server = createServer(app);
+const wss = new WebSocketServer({ server });
+
 
 require('dotenv').config();
+app.use(cors());
+app.use(express.json());
+
+
 
 // CORS Setup
 const corsOptions = {
@@ -16,6 +26,21 @@ const corsOptions = {
   };
   
   app.use(cors(corsOptions));
+
+
+  const redisSubscriber = createClient({ url: 'redis://redis:6379' });
+  redisSubscriber.connect();
+
+  redisSubscriber.subscribe('task_updates', (message) => {
+    // Broadcast message to all connected WebSocket clients
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(message);
+      }
+    });
+  });
+
+
 
 
 // PostgreSQL Client Setup
@@ -65,6 +90,17 @@ app.post('/api/tasks', async (req, res) => {
     res.status(201).json({ taskId, status: 'pending' });
   } catch (error) {
     res.status(500).json({ error: 'Failed to submit task' });
+  }
+});
+
+// Add this endpoint to index.js
+app.get('/api/tasks', async (req, res) => {
+  try {
+    const result = await pgClient.query('SELECT task_id as id, status, data, retries FROM tasks ORDER BY created_at DESC');
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching tasks:', error);
+    res.status(500).json({ error: 'Failed to fetch tasks' });
   }
 });
 
