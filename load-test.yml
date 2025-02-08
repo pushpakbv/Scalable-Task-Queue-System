@@ -1,0 +1,16 @@
+config:
+  target: "http://localhost:3000"
+  phases:
+  - duration: 30  # Shorter initial phase
+    arrivalRate: 10
+  - duration: 60
+    arrivalRate: 20  # Gradually increase load
+
+scenarios:
+  - name: "Task Submission Test"
+    flow:
+      - post:
+          url: "/api/tasks"
+          json:
+            type: "load_test"
+            data: "payload-{{ $timestamp }}"

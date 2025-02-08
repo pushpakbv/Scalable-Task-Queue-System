@@ -35,3 +35,4 @@ worker/yarn.lock
 # === PostgreSQL & Redis === #
 *.dump                # Database dumps
 postgres-data/        # Docker volume for PostgreSQL
+report.json

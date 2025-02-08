@@ -1,0 +1,28 @@
+config:
+  target: "http://localhost:3000"
+  phases:
+    - duration: 60
+      arrivalRate: 50
+      name: "Warm up"
+    - duration: 120
+      arrivalRate: 100
+      name: "Sustained load"
+  plugins:
+    redis:
+      host: "redis://localhost:6379"
+
+scenarios:
+  - flow:
+      - post:
+          url: "/api/tasks"
+          json:
+            type: "load_test"
+            data: "sample-${process.pid}-{{ $timestamp }}"
+      - redis:
+          command: "XLEN task_stream"
+          capture: "stream_length"
+      - log: "Current queue length: {{ stream_length }}"
+
+reporters:
+  - name: "hdf"
+    filename: "load-test-results.hdf"
