@@ -16,6 +16,7 @@ services:
       - PG_PASSWORD=password
       - PG_DATABASE=task_queue
       - PG_PORT=5432
+      - OTEL_SERVICE_NAME=task-api
 
   worker:
     build: ./worker
@@ -32,6 +33,12 @@ services:
       - PG_PASSWORD=password
       - PG_DATABASE=task_queue
       - PG_PORT=5432
+      - OTEL_SERVICE_NAME=task-worker
+  jaeger:
+    image: jaegertracing/all-in-one:1.47
+    ports:
+      - "16686:16686"
+      - "6831:6831/udp"
 
   redis:
     image: redis

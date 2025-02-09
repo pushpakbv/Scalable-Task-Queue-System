@@ -1,5 +1,7 @@
+require('./tracing'); // ← Import tracing first
 const { createClient } = require('redis');
 const { Pool } = require('pg');
+const winston = require('winston');
 
 // Redis Configuration
 const redisClient = createClient({
@@ -33,6 +35,19 @@ process.on('unhandledRejection', (err) => {
   } catch (err) {
     if(!err.message.includes('BUSYGROUP')) throw err;
   }
+
+//Add logger
+const logger = winston.createLogger({
+  level: 'info',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.json()
+  ),
+  transports: [
+    new winston.transports.Console(),
+    new winston.transports.File({ filename: 'logs/combined.log' })
+  ]
+});
 
   // Worker Loop
   while(true) {

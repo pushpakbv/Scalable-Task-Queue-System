@@ -1,80 +1,4 @@
-// const express = require('express');
-// const { Pool } = require('pg');
-// const { createClient } = require('redis');
-// const { v4: uuidv4 } = require('uuid');
-// const cors = require('cors');
-// const { createServer } = require('http');
-// const { WebSocketServer } = require('ws');
-
-// const app = express();
-// const server = createServer(app);
-
-// // Redis Client Configuration
-// const redisClient = createClient({
-//   socket: {
-//     host: process.env.REDIS_HOST || 'redis',
-//     port: process.env.REDIS_PORT || 6379
-//   }
-// });
-
-// // PostgreSQL Pool Configuration
-// const pgPool = new Pool({
-//   host: process.env.PG_HOST,
-//   user: process.env.PG_USER,
-//   password: process.env.PG_PASSWORD,
-//   database: process.env.PG_DATABASE,
-//   port: process.env.PG_PORT,
-//   max: 20
-// });
-
-// // WebSocket Server
-// const wss = new WebSocketServer({ server });
-// redisClient.connect().then(() => {
-//   redisClient.subscribe('task_updates', (message) => {
-//     wss.clients.forEach(client => {
-//       if(client.readyState === client.OPEN) client.send(message);
-//     });
-//   });
-// });
-
-// // Middleware
-// app.use(cors());
-// app.use(express.json());
-
-// // API Endpoints
-// app.post('/api/tasks', async (req, res) => {
-//   const taskId = uuidv4();
-//   try {
-//     await redisClient.xAdd('task_stream', '*', { 
-//       task: JSON.stringify({ id: taskId, data: req.body }) 
-//     });
-
-//     await pgPool.query(
-//       'INSERT INTO tasks(task_id, status, data) VALUES ($1, $2, $3)',
-//       [taskId, 'pending', JSON.stringify(req.body)]
-//     );
-
-//     res.status(201).json({ taskId });
-//   } catch (error) {
-//     res.status(500).json({ error: 'Task submission failed' });
-//   }
-// });
-
-// app.get('/api/tasks', async (req, res) => {
-//   try {
-//     const result = await pgPool.query(
-//       'SELECT task_id as id, status, data, retries FROM tasks ORDER BY created_at DESC LIMIT 100'
-//     );
-//     res.json(result.rows);
-//   } catch (error) {
-//     res.status(500).json({ error: 'Failed to fetch tasks' });
-//   }
-// });
-
-// server.listen(3000, () => console.log('API running on port 3000'));
-
-
-
+require('./tracing'); // ← Import tracing first
 const express = require('express');
 const { Pool } = require('pg');
 const { createClient } = require('redis');
@@ -82,6 +6,8 @@ const { v4: uuidv4 } = require('uuid');
 const cors = require('cors');
 const { createServer } = require('http');
 const { WebSocketServer } = require('ws');
+const prometheus = require('prom-client');
+const winston = require('winston');
 
 const app = express();
 const server = createServer(app);
@@ -147,11 +73,66 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// Initialize Prometheus metrics
+prometheus.collectDefaultMetrics();
+
+// Custom Metrics
+const taskMetrics = {
+  incoming: new prometheus.Counter({
+    name: 'tasks_incoming_total',
+    help: 'Total incoming tasks',
+    labelNames: ['type']
+  }),
+  processed: new prometheus.Counter({
+    name: 'tasks_processed_total',
+    help: 'Total processed tasks',
+    labelNames: ['status']
+  }),
+  duration: new prometheus.Histogram({
+    name: 'task_processing_duration_seconds',
+    help: 'Task processing time distribution',
+    buckets: [0.1, 0.5, 1, 2, 5]
+  })
+};
+
+//Add logger
+const logger = winston.createLogger({
+  level: 'info',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.json()
+  ),
+  transports: [
+    new winston.transports.Console(),
+    new winston.transports.File({ filename: 'logs/combined.log' })
+  ]
+});
+
+
+
 // API Endpoints
+// prometheus.collectDefaultMetrics();
+
+app.get('/metrics', async (req, res) => {
+  res.set('Content-Type', prometheus.register.contentType);
+  res.end(await prometheus.register.metrics());
+});
+// Create custom metrics
+// const taskCounter = new prometheus.Counter({
+//   name: 'tasks_processed_total',
+//   help: 'Total number of tasks processed',
+//   labelNames: ['status']
+// });
+
 app.post('/api/tasks', async (req, res) => {
   const taskId = uuidv4();
+  const taskType = req.body.type || 'unknown';
+  taskMetrics.incoming.inc({ type: taskType });
+  logger.info('Task submitted', { type: taskType });
+
   
   try {
+    logger.info('Task submitted', { taskType: req.body.type });
     // Begin transaction
     const client = await pgPool.connect();
     
