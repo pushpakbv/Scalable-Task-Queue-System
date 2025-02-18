@@ -76,6 +76,13 @@ const logger = winston.createLogger({
               'UPDATE tasks SET status=$1 WHERE task_id=$2',
               ['completed', task.id]
             );
+
+            // Publish status update
+            await redisClient.publish('task_updates', JSON.stringify({
+            id: task.id,
+            status: 'completed',
+            retries: 0
+          }));
             
             await redisClient.xAck('task_stream', 'workers_group', messageId);
           } catch (error) {

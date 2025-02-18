@@ -1,4 +1,5 @@
 require('./tracing'); // ← Import tracing first
+require('dotenv').config();
 const express = require('express');
 const { Pool } = require('pg');
 const { createClient } = require('redis');
@@ -95,6 +96,11 @@ const taskMetrics = {
   })
 };
 
+const queueLengthGauge = new prometheus.Gauge({
+  name: 'task_queue_length',
+  help: 'Current length of task queue'
+});
+
 //Add logger
 const logger = winston.createLogger({
   level: 'info',
@@ -112,6 +118,19 @@ const logger = winston.createLogger({
 
 // API Endpoints
 // prometheus.collectDefaultMetrics();
+
+app.get('/health', async (req, res) => {
+  const checks = {
+    database: await pgPool.query('SELECT 1').then(() => true).catch(() => false),
+    redis: redisClient.isOpen,
+    uptime: process.uptime()
+  };
+  
+  res.json({
+    status: Object.values(checks).every(Boolean) ? 'OK' : 'ERROR',
+    ...checks
+  });
+});
 
 app.get('/metrics', async (req, res) => {
   res.set('Content-Type', prometheus.register.contentType);
@@ -178,7 +197,7 @@ app.post('/api/tasks', async (req, res) => {
 app.get('/api/tasks', async (req, res) => {
   try {
     const result = await pgPool.query(
-      'SELECT task_id as id, status, data, retries FROM tasks ORDER BY created_at DESC LIMIT 100'
+      'SELECT task_id as id, status, data, retries, created_at as "createdAt" FROM tasks ORDER BY created_at DESC LIMIT 100'
     );
     res.json(result.rows);
   } catch (error) {

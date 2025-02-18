@@ -50,7 +50,9 @@ export default function TaskList() {
         <div key={task.id} className="p-4 border rounded-lg bg-white shadow-sm">
           <p>Task ID: {task.id}</p>
           <p>Status: {task.status}</p>
-          <p>Retries: {task.retries}</p>
+          <div className={`status-badge ${task.retries > 0 ? 'bg-yellow-100' : ''}`}>
+            Retries: {task.retries}
+          </div>
         </div>
       ))}
     </div>

@@ -1,0 +1,20 @@
+{
+    "title": "Task Queue Monitoring",
+    "panels": [
+      {
+        "type": "graph",
+        "title": "Tasks Processed",
+        "targets": [{
+          "expr": "sum(rate(worker_tasks_processed_total[5m])) by (status)",
+          "legendFormat": "{{status}}"
+        }]
+      },
+      {
+        "type": "singlestat",
+        "title": "Success Rate",
+        "targets": [{
+          "expr": "sum(worker_tasks_processed_total{status='success'}) / sum(worker_tasks_processed_total)"
+        }]
+      }
+    ]
+  }
