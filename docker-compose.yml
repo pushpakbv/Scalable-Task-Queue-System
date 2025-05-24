@@ -14,7 +14,14 @@ services:
     environment:
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_DATABASE_TYPE=sqlite3
+      - GF_DATABASE_PATH=/var/lib/grafana/grafana.db
+      - GF_LOG_LEVEL=warn
+      - GF_LOG_MODE=console
+    volumes:
+      - grafana-data:/var/lib/grafana
     depends_on: [prometheus]
+  
   api:
     build: ./backend
     ports:
@@ -33,6 +40,10 @@ services:
       - PG_DATABASE=task_queue
       - PG_PORT=5432
       - OTEL_SERVICE_NAME=task-api
+      - LOG_LEVEL=info
+      - NODE_ENV=production
+      # Only log errors from prometheus and health checks
+      - DEBUG_LEVEL=error
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
       interval: 30s
@@ -55,6 +66,8 @@ services:
       - PG_DATABASE=task_queue
       - PG_PORT=5432
       - OTEL_SERVICE_NAME=task-worker
+      - LOG_LEVEL=info
+      - NODE_ENV=production
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
       interval: 30s
@@ -66,6 +79,11 @@ services:
     ports:
       - "16686:16686"
       - "6831:6831/udp"
+    environment:
+      - COLLECTOR_ZIPKIN_HOST_PORT=:9411
+      - COLLECTOR_OTLP_ENABLED=true
+    volumes:
+      - jaeger-data:/badger
 
   redis:
     image: redis
@@ -94,3 +112,5 @@ services:
 
 volumes:
   postgres-data:
+  grafana-data:
+  jaeger-data:

@@ -9,9 +9,28 @@ const { createServer } = require('http');
 const { WebSocketServer } = require('ws');
 const prometheus = require('prom-client');
 const winston = require('winston');
+const rateLimit = require('express-rate-limit');
 
 const app = express();
 const server = createServer(app);
+
+// Configure rate limiter
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  limit: 100, // Limit each IP to 100 requests per window
+  standardHeaders: 'draft-7', // Return rate limit info in the `RateLimit-*` headers
+  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+  message: 'Too many requests from this IP, please try again after 15 minutes'
+});
+
+// More strict limiter for task submission
+const taskSubmissionLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000, // 5 minutes
+  limit: 20, // Limit to 20 task submissions per 5 minutes
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: 'Too many task submissions, please try again later'
+});
 
 // PostgreSQL Pool Configuration with fallback values
 const pgPool = new Pool({
@@ -23,9 +42,19 @@ const pgPool = new Pool({
   max: 20
 });
 
-// Redis Client Configuration
+// Redis Client Configuration with better error handling
 const redisClient = createClient({
-  url: process.env.REDIS_URL || 'redis://redis:6379'
+  url: process.env.REDIS_URL || 'redis://redis:6379',
+  socket: {
+    reconnectStrategy: (retries) => {
+      const delay = Math.min(retries * 500, 3000);
+      return delay;
+    }
+  }
+});
+
+redisClient.on('error', (err) => {
+  logger.error('Redis client error:', err);
 });
 
 // WebSocket Server with CORS validation
@@ -36,6 +65,46 @@ const wss = new WebSocketServer({
     if (info.origin === allowedOrigin) callback(true);
     else callback(false);
   }
+});
+
+// Configure logger with improved formatting and filtering
+const logger = winston.createLogger({
+  level: process.env.LOG_LEVEL || 'info',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.printf(({ level, message, timestamp, ...meta }) => {
+      return `${timestamp} ${level.toUpperCase()}: ${message} ${
+        Object.keys(meta).length ? JSON.stringify(meta) : ''
+      }`;
+    })
+  ),
+  transports: [
+    new winston.transports.Console({
+      format: winston.format.combine(
+        winston.format.colorize(),
+        winston.format.timestamp(),
+        winston.format.printf(({ level, message, timestamp, ...meta }) => {
+          return `${timestamp} ${level}: ${message} ${
+            Object.keys(meta).length ? JSON.stringify(meta) : ''
+          }`;
+        })
+      )
+    }),
+    new winston.transports.File({ 
+      filename: 'logs/combined.log',
+      // Don't log metric and health check requests to file
+      format: winston.format.combine(
+        winston.format.timestamp(),
+        winston.format.json(),
+        winston.format(info => {
+          if (info.path === '/metrics' || info.path === '/health') {
+            return false;
+          }
+          return info;
+        })()
+      )
+    })
+  ]
 });
 
 // Initialize connections
@@ -74,6 +143,32 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// Apply global rate limiting to all requests
+app.use(apiLimiter);
+
+// Add HTTP request logging middleware (excluding metrics/health endpoints)
+app.use((req, res, next) => {
+  // Skip logging for metrics and health check endpoints to reduce noise
+  if (req.path === '/metrics' || req.path === '/health') {
+    return next();
+  }
+  
+  const start = Date.now();
+  
+  // Log when the request completes
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    logger.info(`HTTP ${req.method} ${req.path}`, {
+      method: req.method,
+      path: req.path,
+      statusCode: res.statusCode,
+      duration: `${duration}ms`
+    });
+  });
+  
+  next();
+});
+
 // Initialize Prometheus metrics
 prometheus.collectDefaultMetrics();
 
@@ -100,21 +195,6 @@ const queueLengthGauge = new prometheus.Gauge({
   name: 'task_queue_length',
   help: 'Current length of task queue'
 });
-
-//Add logger
-const logger = winston.createLogger({
-  level: 'info',
-  format: winston.format.combine(
-    winston.format.timestamp(),
-    winston.format.json()
-  ),
-  transports: [
-    new winston.transports.Console(),
-    new winston.transports.File({ filename: 'logs/combined.log' })
-  ]
-});
-
-
 
 // API Endpoints
 // prometheus.collectDefaultMetrics();
@@ -143,15 +223,39 @@ app.get('/metrics', async (req, res) => {
 //   labelNames: ['status']
 // });
 
-app.post('/api/tasks', async (req, res) => {
-  const taskId = uuidv4();
-  const taskType = req.body.type || 'unknown';
-  taskMetrics.incoming.inc({ type: taskType });
-  logger.info('Task submitted', { type: taskType });
+app.post('/api/tasks', taskSubmissionLimiter, async (req, res) => {
+  // Input validation
+  if (!req.body || typeof req.body !== 'object') {
+    return res.status(400).json({ error: 'Invalid request body' });
+  }
+  
+  // Validate required fields
+  if (!req.body.type) {
+    return res.status(400).json({ error: 'Task type is required' });
+  }
+  
+  // Sanitize and validate specific task types
+  const validTaskTypes = ['image_resize', 'data_processing', 'report_generation'];
+  const taskType = String(req.body.type);
+  
+  if (!validTaskTypes.includes(taskType)) {
+    return res.status(400).json({ error: 'Invalid task type' });
+  }
+  
+  // Validate imageUrl if provided for image_resize task
+  if (taskType === 'image_resize' && req.body.imageUrl) {
+    try {
+      new URL(req.body.imageUrl); // This will throw if not a valid URL
+    } catch (e) {
+      return res.status(400).json({ error: 'Invalid image URL' });
+    }
+  }
 
+  const taskId = uuidv4();
+  taskMetrics.incoming.inc({ type: taskType });
   
   try {
-    logger.info('Task submitted', { taskType: req.body.type });
+    logger.info('Task submitted', { taskId, taskType });
     // Begin transaction
     const client = await pgPool.connect();
     
@@ -208,6 +312,40 @@ app.get('/api/tasks', async (req, res) => {
     });
   }
 });
+
+// Graceful shutdown handler
+process.on('SIGTERM', gracefulShutdown);
+process.on('SIGINT', gracefulShutdown);
+
+async function gracefulShutdown() {
+  logger.info('Graceful shutdown initiated');
+  
+  // Close server first to stop accepting new requests
+  server.close(() => {
+    logger.info('HTTP server closed');
+  });
+  
+  // Close WebSocket connections
+  wss.clients.forEach(client => {
+    client.close(1000, 'Server shutdown');
+  });
+  
+  try {
+    // Close database connections
+    if (redisClient.isOpen) {
+      await redisClient.quit();
+      logger.info('Redis connection closed');
+    }
+    
+    await pgPool.end();
+    logger.info('Database connection pool closed');
+    
+    process.exit(0);
+  } catch (error) {
+    logger.error('Error during shutdown:', error);
+    process.exit(1);
+  }
+}
 
 // Initialize connections before starting server
 initializeConnections().then(() => {
