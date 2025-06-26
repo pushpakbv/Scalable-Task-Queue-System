@@ -25,7 +25,8 @@ A high-performance task queue system designed to handle asynchronous operations 
 ---
 
 ## System Integration
-![architecture](https://github.com/user-attachments/assets/fedccfff-3163-4a75-b2aa-df6ca5bb0d6c)
+<img src="https://github.com/user-attachments/assets/fedccfff-3163-4a75-b2aa-df6ca5bb0d6c" alt="Architecture" width="400">
+<!-- ![architecture](https://github.com/user-attachments/assets/fedccfff-3163-4a75-b2aa-df6ca5bb0d6c) -->
 
 ---
 
