@@ -1,4 +1,18 @@
 services:
+  frontend:
+    build: ./frontend
+    ports:
+      - "3001:3001"
+    environment:
+      - API_URL=http://api:3000
+    depends_on:
+      - api
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      
   prometheus:
     image: prom/prometheus
     ports: ["9090:9090"]

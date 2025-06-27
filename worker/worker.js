@@ -121,6 +121,8 @@ process.on('SIGINT', gracefulShutdown);
             const task = JSON.parse(message.task);
             const taskId = task.id;
             const taskType = task.data?.type || 'unknown';
+            
+            // Add at start of task processing
             const startTime = Date.now();
             
             logger.info(`Processing task`, { taskId, taskType });
@@ -157,17 +159,21 @@ process.on('SIGINT', gracefulShutdown);
                 throw new Error('Simulated processing failure');
               }
               
-              // Mark as completed in DB
+              // Add after successful completion
+              const processingTime = (Date.now() - startTime) / 1000; // store seconds
+              
+              // Mark as completed in DB and update processing time
               await pgPool.query(
-                'UPDATE tasks SET status=$1 WHERE task_id=$2',
-                ['completed', taskId]
+                'UPDATE tasks SET status=$1, processing_time=$2 WHERE task_id=$3',
+                ['completed', processingTime, taskId]
               );
 
               // Publish status update
               await redisClient.publish('task_updates', JSON.stringify({
                 id: taskId,
                 status: 'completed',
-                retries: task.retries || 0
+                retries: task.retries || 0,
+                processingTime: processingTime
               }));
               
               // Acknowledge the message in Redis stream
@@ -176,7 +182,7 @@ process.on('SIGINT', gracefulShutdown);
               logger.info(`Task completed`, { 
                 taskId, 
                 taskType,
-                processingTime: Date.now() - startTime
+                processingTime: processingTime
               });
             } catch (error) {
               logger.error(`Task processing failed`, { 

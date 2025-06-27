@@ -243,13 +243,6 @@ app.post('/api/tasks', taskSubmissionLimiter, async (req, res) => {
   }
   
   // Validate imageUrl if provided for image_resize task
-  if (taskType === 'image_resize' && req.body.imageUrl) {
-    try {
-      new URL(req.body.imageUrl); // This will throw if not a valid URL
-    } catch (e) {
-      return res.status(400).json({ error: 'Invalid image URL' });
-    }
-  }
 
   const taskId = uuidv4();
   taskMetrics.incoming.inc({ type: taskType });

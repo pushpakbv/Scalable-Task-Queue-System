@@ -4,5 +4,6 @@ CREATE TABLE IF NOT EXISTS tasks (
   status VARCHAR(50) NOT NULL,
   data JSONB,
   retries INTEGER DEFAULT 0,
-  created_at TIMESTAMP DEFAULT NOW()
+  created_at TIMESTAMP DEFAULT NOW(),
+  processing_time DOUBLE PRECISION
 );

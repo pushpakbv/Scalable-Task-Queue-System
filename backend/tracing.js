@@ -3,15 +3,11 @@ const { ConsoleSpanExporter, SimpleSpanProcessor, BatchSpanProcessor } = require
 const { HttpInstrumentation } = require('@opentelemetry/instrumentation-http');
 const { RedisInstrumentation } = require('@opentelemetry/instrumentation-redis');
 const { JaegerExporter } = require('@opentelemetry/exporter-jaeger');
-const { Resource } = require('@opentelemetry/resources');
 const { SemanticResourceAttributes } = require('@opentelemetry/semantic-conventions');
 
 // Create a tracer provider with proper service name
-const provider = new NodeTracerProvider({
-  resource: new Resource({
-    [SemanticResourceAttributes.SERVICE_NAME]: process.env.OTEL_SERVICE_NAME || 'task-api',
-  }),
-});
+// NodeTracerProvider will pick up service name from OTEL_SERVICE_NAME environment variable
+const provider = new NodeTracerProvider();
 
 // Configure console exporter only in development mode
 if (process.env.NODE_ENV === 'development') {

@@ -32,6 +32,7 @@ export async function fetchGet(endpoint: string) {
 /**
  * Make a POST request to the API
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function fetchPost(endpoint: string, data: any) {
   try {
     const response = await fetch(`${API_URL}${endpoint}`, {
