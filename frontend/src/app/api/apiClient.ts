@@ -51,7 +51,19 @@ export async function fetchPost(endpoint: string, data: any) {
       } catch {
         errorData = { error: `API error: ${response.status}` };
       }
-      throw new Error(errorData.error || `API error: ${response.status}`);
+      
+      // Provide more specific error messages based on status codes
+      let errorMessage = errorData.error || errorData.message || `API error: ${response.status}`;
+      
+      if (response.status === 429) {
+        errorMessage = 'Too many requests. Please wait a moment and try again.';
+      } else if (response.status === 503) {
+        errorMessage = 'Service temporarily unavailable. Please try again later.';
+      } else if (response.status >= 500) {
+        errorMessage = 'Server error occurred. Please try again later.';
+      }
+      
+      throw new Error(errorMessage);
     }
     
     return await response.json();

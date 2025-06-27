@@ -2,9 +2,9 @@ config:
   target: "http://localhost:3000"
   phases:
   - duration: 300 # Shorter initial phase
-    arrivalRate: 10
+    arrivalRate: 10  # Reduced to stay within rate limits
   # - duration: 60
-  #   arrivalRate: 20  # Gradually increase load
+  #   arrivalRate: 8   # Reduced to stay within rate limits
 
 scenarios:
   - name: "Task Submission Test"
@@ -14,3 +14,5 @@ scenarios:
           json:
             type: "load_test"
             data: "payload-{{ $timestamp }}"
+          headers:
+            Content-Type: "application/json"

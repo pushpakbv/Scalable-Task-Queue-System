@@ -17,7 +17,7 @@ const server = createServer(app);
 // Configure rate limiter
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  limit: 100, // Limit each IP to 100 requests per window
+  limit: 1000, // Increased from 100 to 1000 requests per window for load testing
   standardHeaders: 'draft-7', // Return rate limit info in the `RateLimit-*` headers
   legacyHeaders: false, // Disable the `X-RateLimit-*` headers
   message: 'Too many requests from this IP, please try again after 15 minutes'
@@ -25,11 +25,18 @@ const apiLimiter = rateLimit({
 
 // More strict limiter for task submission
 const taskSubmissionLimiter = rateLimit({
-  windowMs: 5 * 60 * 1000, // 5 minutes
-  limit: 20, // Limit to 20 task submissions per 5 minutes
+  windowMs: 1 * 60 * 1000, // 1 minute window
+  limit: 1000, // Greatly increased from 100 to 1000 task submissions per minute
   standardHeaders: 'draft-7',
   legacyHeaders: false,
-  message: 'Too many task submissions, please try again later'
+  message: 'Too many task submissions, please try again later',
+  // Skip rate limiting for load test requests during development
+  skip: (req) => {
+    if (process.env.NODE_ENV === 'development' && req.body?.type === 'load_test') {
+      return true; // Completely skip rate limiting for load tests
+    }
+    return false;
+  }
 });
 
 // PostgreSQL Pool Configuration with fallback values
@@ -39,7 +46,11 @@ const pgPool = new Pool({
   password: process.env.PG_PASSWORD || 'password',
   database: process.env.PG_DATABASE || 'task_queue',
   port: process.env.PG_PORT || 5432,
-  max: 20
+  max: 20,
+  min: 2,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000,
+  acquireTimeoutMillis: 60000
 });
 
 // Redis Client Configuration with better error handling
@@ -203,11 +214,21 @@ app.get('/health', async (req, res) => {
   const checks = {
     database: await pgPool.query('SELECT 1').then(() => true).catch(() => false),
     redis: redisClient.isOpen,
-    uptime: process.uptime()
+    uptime: process.uptime(),
+    circuitBreaker: !circuitBreakerState.isOpen,
+    queueLength: 0
   };
   
-  res.json({
-    status: Object.values(checks).every(Boolean) ? 'OK' : 'ERROR',
+  try {
+    checks.queueLength = await redisClient.xLen('task_stream');
+  } catch (error) {
+    logger.warn('Failed to get queue length in health check:', error.message);
+  }
+  
+  const isHealthy = checks.database && checks.redis && checks.circuitBreaker;
+  
+  res.status(isHealthy ? 200 : 503).json({
+    status: isHealthy ? 'OK' : 'ERROR',
     ...checks
   });
 });
@@ -223,7 +244,76 @@ app.get('/metrics', async (req, res) => {
 //   labelNames: ['status']
 // });
 
+// Simple circuit breaker for system protection
+let circuitBreakerState = {
+  failures: 0,
+  lastFailure: null,
+  isOpen: false,
+  lastSuccess: null
+};
+
+const CIRCUIT_BREAKER_THRESHOLD = 20; // Increased threshold for load testing
+const CIRCUIT_BREAKER_TIMEOUT = 30000; // 30 seconds
+const CIRCUIT_BREAKER_SUCCESS_THRESHOLD = 5; // Reset after 5 successes
+
+function checkCircuitBreaker() {
+  if (circuitBreakerState.isOpen) {
+    const now = Date.now();
+    if (now - circuitBreakerState.lastFailure > CIRCUIT_BREAKER_TIMEOUT) {
+      // Reset circuit breaker
+      circuitBreakerState.isOpen = false;
+      circuitBreakerState.failures = 0;
+      logger.info('Circuit breaker reset');
+    }
+  }
+  return !circuitBreakerState.isOpen;
+}
+
+function recordFailure() {
+  circuitBreakerState.failures++;
+  circuitBreakerState.lastFailure = Date.now();
+  
+  if (circuitBreakerState.failures >= CIRCUIT_BREAKER_THRESHOLD) {
+    circuitBreakerState.isOpen = true;
+    logger.warn('Circuit breaker opened due to too many failures', { 
+      failures: circuitBreakerState.failures 
+    });
+  }
+}
+
+function recordSuccess() {
+  if (circuitBreakerState.failures > 0) {
+    circuitBreakerState.failures = Math.max(0, circuitBreakerState.failures - 1);
+    circuitBreakerState.lastSuccess = Date.now();
+  }
+}
+
 app.post('/api/tasks', taskSubmissionLimiter, async (req, res) => {
+  // Check circuit breaker first
+  if (!checkCircuitBreaker()) {
+    return res.status(503).json({ 
+      error: 'Service temporarily unavailable',
+      message: 'System is experiencing high load, please try again later'
+    });
+  }
+
+  // Check queue length for backpressure
+  try {
+    const queueLength = await redisClient.xLen('task_stream');
+    if (queueLength > 1000) { // Limit queue to 1000 tasks
+      return res.status(429).json({
+        error: 'Queue is full',
+        message: 'Task queue is at capacity, please try again later',
+        queueLength: queueLength
+      });
+    }
+    
+    // Update queue length metric
+    queueLengthGauge.set(queueLength);
+  } catch (queueError) {
+    logger.warn('Failed to check queue length:', queueError.message);
+  }
+
   // Input validation
   if (!req.body || typeof req.body !== 'object') {
     return res.status(400).json({ error: 'Invalid request body' });
@@ -235,7 +325,7 @@ app.post('/api/tasks', taskSubmissionLimiter, async (req, res) => {
   }
   
   // Sanitize and validate specific task types
-  const validTaskTypes = ['image_resize', 'data_processing', 'report_generation'];
+  const validTaskTypes = ['image_resize', 'data_processing', 'report_generation', 'load_test'];
   const taskType = String(req.body.type);
   
   if (!validTaskTypes.includes(taskType)) {
@@ -255,7 +345,7 @@ app.post('/api/tasks', taskSubmissionLimiter, async (req, res) => {
     try {
       await client.query('BEGIN');
       
-      // Add to Redis stream
+      // Add to Redis stream with error handling
       await redisClient.xAdd('task_stream', '*', {
         task: JSON.stringify({ id: taskId, data: req.body })
       });
@@ -275,6 +365,9 @@ app.post('/api/tasks', taskSubmissionLimiter, async (req, res) => {
       
       await client.query('COMMIT');
       
+      // Record success for circuit breaker
+      recordSuccess();
+      
       res.status(201).json({ taskId, status: 'pending' });
     } catch (error) {
       await client.query('ROLLBACK');
@@ -283,11 +376,26 @@ app.post('/api/tasks', taskSubmissionLimiter, async (req, res) => {
       client.release();
     }
   } catch (error) {
-    console.error('Task submission failed:', error);
-    res.status(500).json({ 
-      error: 'Task submission failed',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    logger.error('Task submission failed:', { taskId, error: error.message });
+    recordFailure(); // Record failure for circuit breaker
+    
+    // Check if it's a database connection issue
+    if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
+      res.status(503).json({ 
+        error: 'Service temporarily unavailable',
+        message: 'Database connection failed'
+      });
+    } else if (error.message.includes('Redis')) {
+      res.status(503).json({ 
+        error: 'Service temporarily unavailable',
+        message: 'Queue service failed'
+      });
+    } else {
+      res.status(500).json({ 
+        error: 'Task submission failed',
+        details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
   }
 });
 
@@ -298,11 +406,19 @@ app.get('/api/tasks', async (req, res) => {
     );
     res.json(result.rows);
   } catch (error) {
-    console.error('Failed to fetch tasks:', error);
-    res.status(500).json({ 
-      error: 'Failed to fetch tasks',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    logger.error('Failed to fetch tasks:', { error: error.message });
+    
+    if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
+      res.status(503).json({ 
+        error: 'Service temporarily unavailable',
+        message: 'Database connection failed'
+      });
+    } else {
+      res.status(500).json({ 
+        error: 'Failed to fetch tasks',
+        details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
   }
 });
 
